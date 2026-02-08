@@ -86,6 +86,43 @@ export async function resolveGatewayRuntimeConfig(params: {
     process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
 
   assertGatewayAuthConfigured(resolvedAuth);
+
+  // Require explicit env-var confirmation for dangerous auth bypass flags
+  if (params.cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
+    if (process.env.OPENCLAW_DANGEROUSLY_DISABLE_DEVICE_AUTH !== "1") {
+      throw new Error(
+        "gateway.controlUi.dangerouslyDisableDeviceAuth=true requires environment variable " +
+          "OPENCLAW_DANGEROUSLY_DISABLE_DEVICE_AUTH=1 to be set as explicit confirmation.",
+      );
+    }
+    console.warn(
+      "[SECURITY WARNING] Device authentication is DISABLED for the Control UI. " +
+        "This bypasses device identity checks. Only use this in short-lived break-glass scenarios.",
+    );
+  }
+
+  if (params.cfg.gateway?.controlUi?.allowInsecureAuth === true) {
+    if (process.env.OPENCLAW_ALLOW_INSECURE_AUTH !== "1") {
+      throw new Error(
+        "gateway.controlUi.allowInsecureAuth=true requires environment variable " +
+          "OPENCLAW_ALLOW_INSECURE_AUTH=1 to be set as explicit confirmation.",
+      );
+    }
+    console.warn(
+      "[SECURITY WARNING] Insecure HTTP authentication is ENABLED for the Control UI. " +
+        "Credentials may be transmitted in cleartext. Prefer HTTPS or localhost.",
+    );
+  }
+
+  const tlsEnabled = params.cfg.gateway?.tls?.enabled === true;
+  if (!isLoopbackHost(bindHost) && !tlsEnabled && tailscaleMode === "off") {
+    console.warn(
+      "[SECURITY WARNING] Gateway is exposed on a non-loopback address without TLS. " +
+        "Traffic (including auth credentials) is transmitted in cleartext. " +
+        "Set gateway.tls.enabled=true or use Tailscale Serve (gateway.tailscale.mode=serve).",
+    );
+  }
+
   if (tailscaleMode === "funnel" && authMode !== "password") {
     throw new Error(
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",

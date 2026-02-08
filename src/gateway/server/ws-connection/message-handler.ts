@@ -80,8 +80,14 @@ function formatGatewayAuthFailureMessage(params: {
   authProvided: AuthProvidedKind;
   reason?: string;
   client?: { id?: string | null; mode?: string | null };
+  isLocal?: boolean;
 }): string {
-  const { authMode, authProvided, reason, client } = params;
+  const { authMode, authProvided, reason, client, isLocal } = params;
+
+  // For remote clients, return a generic message to avoid leaking auth configuration details
+  if (isLocal === false) {
+    return "unauthorized";
+  }
   const isCli = isGatewayCliClient(client);
   const isControlUi = client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
   const isWebchat = isWebchatClient(client);
@@ -445,6 +451,7 @@ export function attachGatewayWsMessageHandler(params: {
             authProvided,
             reason: authResult.reason,
             client: connectParams.client,
+            isLocal: isLocalClient,
           });
           setCloseCause("unauthorized", {
             authMode: resolvedAuth.mode,

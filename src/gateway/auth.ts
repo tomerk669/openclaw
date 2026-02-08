@@ -3,6 +3,8 @@ import { timingSafeEqual } from "node:crypto";
 import type { GatewayAuthConfig, GatewayTailscaleMode } from "../config/config.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { isTrustedProxyAddress, parseForwardedForClientIp, resolveGatewayClientIp } from "./net.js";
+import { isHashedPassword, verifyPassword } from "./password-hash.js";
+import { getAuthRateLimiter } from "./rate-limit.js";
 export type ResolvedGatewayAuthMode = "token" | "password";
 
 export type ResolvedGatewayAuth = {
@@ -32,7 +34,7 @@ type TailscaleUser = {
 
 type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
 
-function safeEqual(a: string, b: string): boolean {
+export function safeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) {
     return false;
   }
@@ -241,10 +243,21 @@ export async function authorizeGatewayConnect(params: {
   req?: IncomingMessage;
   trustedProxies?: string[];
   tailscaleWhois?: TailscaleWhoisLookup;
+  clientIp?: string;
 }): Promise<GatewayAuthResult> {
   const { auth, connectAuth, req, trustedProxies } = params;
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
   const localDirect = isLocalDirectRequest(req, trustedProxies);
+  const clientIp = params.clientIp ?? resolveRequestClientIp(req, trustedProxies);
+
+  // Rate-limit non-local clients
+  if (clientIp && !localDirect) {
+    const limiter = getAuthRateLimiter();
+    const check = limiter.check(clientIp);
+    if (!check.allowed) {
+      return { ok: false, reason: "rate_limited" };
+    }
+  }
 
   if (auth.allowTailscale && !localDirect) {
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
@@ -260,32 +273,52 @@ export async function authorizeGatewayConnect(params: {
     }
   }
 
+  const recordResult = (result: GatewayAuthResult): GatewayAuthResult => {
+    if (clientIp && !localDirect) {
+      const limiter = getAuthRateLimiter();
+      if (result.ok) {
+        limiter.recordSuccess(clientIp);
+      } else {
+        limiter.recordFailure(clientIp);
+      }
+    }
+    return result;
+  };
+
   if (auth.mode === "token") {
     if (!auth.token) {
-      return { ok: false, reason: "token_missing_config" };
+      return recordResult({ ok: false, reason: "token_missing_config" });
     }
     if (!connectAuth?.token) {
-      return { ok: false, reason: "token_missing" };
+      return recordResult({ ok: false, reason: "token_missing" });
     }
     if (!safeEqual(connectAuth.token, auth.token)) {
-      return { ok: false, reason: "token_mismatch" };
+      return recordResult({ ok: false, reason: "token_mismatch" });
     }
-    return { ok: true, method: "token" };
+    return recordResult({ ok: true, method: "token" });
   }
 
   if (auth.mode === "password") {
     const password = connectAuth?.password;
     if (!auth.password) {
-      return { ok: false, reason: "password_missing_config" };
+      return recordResult({ ok: false, reason: "password_missing_config" });
     }
     if (!password) {
-      return { ok: false, reason: "password_missing" };
+      return recordResult({ ok: false, reason: "password_missing" });
     }
-    if (!safeEqual(password, auth.password)) {
-      return { ok: false, reason: "password_mismatch" };
+    // Support scrypt-hashed passwords (scrypt:<salt>:<key>) alongside plaintext
+    if (isHashedPassword(auth.password)) {
+      const match = await verifyPassword(password, auth.password);
+      if (!match) {
+        return recordResult({ ok: false, reason: "password_mismatch" });
+      }
+    } else {
+      if (!safeEqual(password, auth.password)) {
+        return recordResult({ ok: false, reason: "password_mismatch" });
+      }
     }
-    return { ok: true, method: "password" };
+    return recordResult({ ok: true, method: "password" });
   }
 
-  return { ok: false, reason: "unauthorized" };
+  return recordResult({ ok: false, reason: "unauthorized" });
 }

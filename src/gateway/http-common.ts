@@ -24,6 +24,15 @@ export function sendUnauthorized(res: ServerResponse) {
   });
 }
 
+export function sendRateLimited(res: ServerResponse, retryAfterMs?: number) {
+  if (retryAfterMs && retryAfterMs > 0) {
+    res.setHeader("Retry-After", String(Math.ceil(retryAfterMs / 1000)));
+  }
+  sendJson(res, 429, {
+    error: { message: "Too Many Requests", type: "rate_limited" },
+  });
+}
+
 export function sendInvalidRequest(res: ServerResponse, message: string) {
   sendJson(res, 400, {
     error: { message, type: "invalid_request_error" },

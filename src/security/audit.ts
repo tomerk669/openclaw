@@ -8,6 +8,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../config/commands.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import { checkPasswordStrength } from "../gateway/password-strength.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { probeGateway } from "../gateway/probe.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
@@ -335,7 +336,9 @@ function collectGatewayConfigFindings(
       title: "Control UI allows insecure HTTP auth",
       detail:
         "gateway.controlUi.allowInsecureAuth=true allows token-only auth over HTTP and skips device identity.",
-      remediation: "Disable it or switch to HTTPS (Tailscale Serve) or localhost.",
+      remediation:
+        "Disable it or switch to HTTPS (Tailscale Serve) or localhost. " +
+        "This flag also requires OPENCLAW_ALLOW_INSECURE_AUTH=1 env var at startup.",
     });
   }
 
@@ -346,7 +349,9 @@ function collectGatewayConfigFindings(
       title: "DANGEROUS: Control UI device auth disabled",
       detail:
         "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for the Control UI.",
-      remediation: "Disable it unless you are in a short-lived break-glass scenario.",
+      remediation:
+        "Disable it unless you are in a short-lived break-glass scenario. " +
+        "This flag also requires OPENCLAW_DANGEROUSLY_DISABLE_DEVICE_AUTH=1 env var at startup.",
     });
   }
 
@@ -359,6 +364,41 @@ function collectGatewayConfigFindings(
       title: "Gateway token looks short",
       detail: `gateway auth token is ${token.length} chars; prefer a long random token.`,
     });
+  }
+
+  const tlsEnabled = cfg.gateway?.tls?.enabled === true;
+  if (bind !== "loopback" && !tlsEnabled && tailscaleMode === "off") {
+    findings.push({
+      checkId: "gateway.no_tls_non_loopback",
+      severity: "warn",
+      title: "Gateway exposed without TLS",
+      detail: `gateway.bind="${bind}" without TLS enabled and Tailscale off. Traffic is unencrypted.`,
+      remediation:
+        "Set gateway.tls.enabled=true, use Tailscale Serve (gateway.tailscale.mode=serve), or ensure a TLS-terminating reverse proxy is in front of the gateway.",
+    });
+  }
+
+  if (auth.mode === "password" && hasPassword) {
+    const strength = checkPasswordStrength(auth.password!);
+    if (!strength.ok) {
+      findings.push({
+        checkId: "gateway.password_weak",
+        severity: "warn",
+        title: "Gateway password is too weak",
+        detail: `gateway auth password failed strength check: ${strength.reasons.join("; ")}.`,
+        remediation:
+          "Use a password with at least 8 characters, mixed case, digits, and special characters.",
+      });
+    } else if (strength.score < 4) {
+      findings.push({
+        checkId: "gateway.password_weak",
+        severity: "warn",
+        title: "Gateway password could be stronger",
+        detail: `gateway auth password strength: ${strength.score}/5. ${strength.reasons.join("; ")}.`,
+        remediation:
+          "Use a password with at least 12 characters, mixed case, digits, and special characters.",
+      });
+    }
   }
 
   return findings;

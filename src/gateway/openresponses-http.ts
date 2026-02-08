@@ -35,10 +35,12 @@ import {
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import { applyCorsHeaders, type CorsConfig } from "./cors.js";
 import {
   readJsonBodyOrError,
   sendJson,
   sendMethodNotAllowed,
+  sendRateLimited,
   sendUnauthorized,
   setSseHeaders,
   writeDone,
@@ -60,6 +62,7 @@ type OpenResponsesHttpOptions = {
   maxBodyBytes?: number;
   config?: GatewayHttpResponsesConfig;
   trustedProxies?: string[];
+  cors?: CorsConfig;
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
@@ -350,9 +353,15 @@ export async function handleOpenResponsesHttpRequest(
     trustedProxies: opts.trustedProxies,
   });
   if (!authResult.ok) {
-    sendUnauthorized(res);
+    if (authResult.reason === "rate_limited") {
+      sendRateLimited(res);
+    } else {
+      sendUnauthorized(res);
+    }
     return true;
   }
+
+  applyCorsHeaders(res, req, opts.cors);
 
   const limits = resolveResponsesLimits(opts.config);
   const maxBodyBytes =
