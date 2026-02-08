@@ -32,3 +32,13 @@ export const TICK_INTERVAL_MS = 30_000;
 export const HEALTH_REFRESH_INTERVAL_MS = 60_000;
 export const DEDUPE_TTL_MS = 5 * 60_000;
 export const DEDUPE_MAX = 1000;
+
+// Rate limiting for auth endpoints
+export const AUTH_RATE_LIMIT_MAX_ATTEMPTS = 5;
+export const AUTH_RATE_LIMIT_WINDOW_MS = 15 * 60_000; // 15 minutes
+export const AUTH_RATE_LIMIT_LOCKOUT_INITIAL_MS = 1_000; // 1 second
+export const AUTH_RATE_LIMIT_LOCKOUT_MAX_MS = 5 * 60_000; // 5 minutes
+export const AUTH_RATE_LIMIT_CLEANUP_INTERVAL_MS = 5 * 60_000; // 5 minutes
+
+// WebSocket connection flood protection
+export const MAX_PENDING_WS_PER_IP = 5;

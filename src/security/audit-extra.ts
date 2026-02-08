@@ -13,6 +13,7 @@ import {
 } from "../agents/sandbox.js";
 import { loadWorkspaceSkillEntries } from "../agents/skills.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
+import { isHashedPassword } from "../gateway/password-hash.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
@@ -149,15 +150,25 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
   const password =
     typeof cfg.gateway?.auth?.password === "string" ? cfg.gateway.auth.password.trim() : "";
   if (password && !looksLikeEnvRef(password)) {
-    findings.push({
-      checkId: "config.secrets.gateway_password_in_config",
-      severity: "warn",
-      title: "Gateway password is stored in config",
-      detail:
-        "gateway.auth.password is set in the config file; prefer environment variables for secrets when possible.",
-      remediation:
-        "Prefer OPENCLAW_GATEWAY_PASSWORD (env) and remove gateway.auth.password from disk.",
-    });
+    if (isHashedPassword(password)) {
+      findings.push({
+        checkId: "config.secrets.gateway_password_in_config",
+        severity: "info",
+        title: "Gateway password hash is stored in config",
+        detail:
+          "gateway.auth.password contains a hashed password (scrypt). This is safer than plaintext.",
+      });
+    } else {
+      findings.push({
+        checkId: "config.secrets.gateway_password_in_config",
+        severity: "warn",
+        title: "Gateway password is stored in plaintext",
+        detail:
+          "gateway.auth.password is set as plaintext in the config file; prefer a hashed password or environment variables.",
+        remediation:
+          "Use a scrypt-hashed password (scrypt:<salt>:<key>) or prefer OPENCLAW_GATEWAY_PASSWORD (env) and remove gateway.auth.password from disk.",
+      });
+    }
   }
 
   const hooksToken = typeof cfg.hooks?.token === "string" ? cfg.hooks.token.trim() : "";

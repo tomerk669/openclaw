@@ -19,7 +19,14 @@ import {
 } from "../canvas-host/a2ui.js";
 import { loadConfig } from "../config/config.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
-import { authorizeGatewayConnect, isLocalDirectRequest, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  authorizeGatewayConnect,
+  isLocalDirectRequest,
+  safeEqual,
+  type ResolvedGatewayAuth,
+} from "./auth.js";
+import { handlePreflight } from "./cors.js";
+import { getPendingWsTracker } from "./ws-connection-limit.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
@@ -157,7 +164,7 @@ export function createHooksRequestHandler(
     }
 
     const token = extractHookToken(req);
-    if (!token || token !== hooksConfig.token) {
+    if (!token || !safeEqual(token, hooksConfig.token)) {
       res.statusCode = 401;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Unauthorized");
@@ -317,6 +324,13 @@ export function createGatewayHttpServer(opts: {
     try {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+      const corsConfig = { allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins };
+
+      // Handle CORS preflight early
+      if (handlePreflight(req, res, corsConfig)) {
+        return;
+      }
+
       if (await handleHooksRequest(req, res)) {
         return;
       }
@@ -377,6 +391,25 @@ export function createGatewayHttpServer(opts: {
         }
       }
       if (controlUiEnabled) {
+        // Gate Control UI behind auth for non-local requests
+        if (!isLocalDirectRequest(req, trustedProxies)) {
+          const token = getBearerToken(req);
+          if (!token) {
+            sendUnauthorized(res);
+            return;
+          }
+          const authResult = await authorizeGatewayConnect({
+            auth: resolvedAuth,
+            connectAuth: { token, password: token },
+            req,
+            trustedProxies,
+          });
+          if (!authResult.ok) {
+            sendUnauthorized(res);
+            return;
+          }
+        }
+
         if (
           handleControlUiAvatarRequest(req, res, {
             basePath: controlUiBasePath,
@@ -419,6 +452,19 @@ export function attachGatewayUpgradeHandler(opts: {
   const { httpServer, wss, canvasHost, clients, resolvedAuth } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
+      // Resolve client IP for connection-flood protection
+      const remoteAddr = req.socket?.remoteAddress ?? "";
+      const tracker = getPendingWsTracker();
+      if (remoteAddr && !tracker.acquire(remoteAddr)) {
+        socket.write("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      // Release the slot when the socket closes
+      if (remoteAddr) {
+        socket.once("close", () => tracker.release(remoteAddr));
+      }
+
       if (canvasHost) {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (url.pathname === CANVAS_WS_PATH) {

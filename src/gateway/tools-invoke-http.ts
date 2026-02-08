@@ -22,11 +22,13 @@ import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import { applyCorsHeaders, type CorsConfig } from "./cors.js";
 import {
   readJsonBodyOrError,
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
+  sendRateLimited,
   sendUnauthorized,
 } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
@@ -102,7 +104,7 @@ function mergeActionIntoArgsIfSupported(params: {
 export async function handleToolsInvokeHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: { auth: ResolvedGatewayAuth; maxBodyBytes?: number; trustedProxies?: string[] },
+  opts: { auth: ResolvedGatewayAuth; maxBodyBytes?: number; trustedProxies?: string[]; cors?: CorsConfig },
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   if (url.pathname !== "/tools/invoke") {
@@ -123,9 +125,15 @@ export async function handleToolsInvokeHttpRequest(
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
   });
   if (!authResult.ok) {
-    sendUnauthorized(res);
+    if (authResult.reason === "rate_limited") {
+      sendRateLimited(res);
+    } else {
+      sendUnauthorized(res);
+    }
     return true;
   }
+
+  applyCorsHeaders(res, req, opts.cors);
 
   const bodyUnknown = await readJsonBodyOrError(req, res, opts.maxBodyBytes ?? DEFAULT_BODY_BYTES);
   if (bodyUnknown === undefined) {

@@ -6,10 +6,12 @@ import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { defaultRuntime } from "../runtime.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import { applyCorsHeaders, type CorsConfig } from "./cors.js";
 import {
   readJsonBodyOrError,
   sendJson,
   sendMethodNotAllowed,
+  sendRateLimited,
   sendUnauthorized,
   setSseHeaders,
   writeDone,
@@ -20,6 +22,7 @@ type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
   maxBodyBytes?: number;
   trustedProxies?: string[];
+  cors?: CorsConfig;
 };
 
 type OpenAiChatMessage = {
@@ -191,9 +194,15 @@ export async function handleOpenAiHttpRequest(
     trustedProxies: opts.trustedProxies,
   });
   if (!authResult.ok) {
-    sendUnauthorized(res);
+    if (authResult.reason === "rate_limited") {
+      sendRateLimited(res);
+    } else {
+      sendUnauthorized(res);
+    }
     return true;
   }
+
+  applyCorsHeaders(res, req, opts.cors);
 
   const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes ?? 1024 * 1024);
   if (body === undefined) {
