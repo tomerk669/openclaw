@@ -391,25 +391,10 @@ export function createGatewayHttpServer(opts: {
         }
       }
       if (controlUiEnabled) {
-        // Gate Control UI behind auth for non-local requests
-        if (!isLocalDirectRequest(req, trustedProxies)) {
-          const token = getBearerToken(req);
-          if (!token) {
-            sendUnauthorized(res);
-            return;
-          }
-          const authResult = await authorizeGatewayConnect({
-            auth: resolvedAuth,
-            connectAuth: { token, password: token },
-            req,
-            trustedProxies,
-          });
-          if (!authResult.ok) {
-            sendUnauthorized(res);
-            return;
-          }
-        }
-
+        // Control UI static assets (HTML/JS/CSS) are served without HTTP-level auth.
+        // Authentication is enforced at the WebSocket connection level (see upgrade handler)
+        // and at API endpoint level. This allows the UI to load on public deployments
+        // (Railway, Render, etc.) while still protecting actual gateway access.
         if (
           handleControlUiAvatarRequest(req, res, {
             basePath: controlUiBasePath,

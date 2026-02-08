@@ -26,11 +26,18 @@ The core problem: when OpenClaw's gateway is bound to a non-loopback address (e.
 
 **Why per-IP, not global?** A global limit would let one attacker block all legitimate users. Per-IP limits contain the blast radius.
 
-### 3. Control UI Auth Gate (`server-http.ts`)
+### 3. Control UI Security Model (`server-http.ts`)
 
-**Problem:** The Control UI HTML/JS/CSS was served to any requester without authentication. On a public deployment, anyone could load the full dashboard interface. While they couldn't _use_ it without auth, serving the UI leaks information about the deployment and increases attack surface.
+**Problem:** The Control UI HTML/JS/CSS was served to any requester without authentication. On a public deployment, anyone could load the full dashboard interface.
 
-**Approach:** Before serving Control UI assets for non-loopback requests, require a bearer token (same pattern already used for canvas auth). Loopback requests bypass auth — consistent with the existing `isLocalDirectRequest()` convention used everywhere else.
+**Initial Approach (Removed):** HTTP-level bearer token requirement for serving UI assets. This broke public deployments (Railway, Render, etc.) because browsers can't include bearer tokens when navigating to URLs, creating a catch-22 where users couldn't access the setup wizard to configure auth in the first place.
+
+**Current Approach:** Control UI static assets (HTML/JS/CSS) are served without HTTP-level authentication. Authentication is enforced at:
+1. **WebSocket connection level** — The gateway upgrade handler requires device pairing + token/password auth before accepting connections
+2. **API endpoint level** — All JSON API endpoints require authentication
+3. **Device pairing** — The UI implements device identity + token-based pairing (see `device-auth.ts`, `device-identity.ts`)
+
+This follows the standard web application security model: public login page, protected APIs. The UI loads for everyone, but actual gateway access requires proper authentication. Information disclosure from serving the UI HTML is minimal and acceptable for the tradeoff of working public deployments.
 
 ### 4. Password Hashing (`password-hash.ts`)
 
